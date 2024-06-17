@@ -7,7 +7,10 @@ use std::{
 
 use windows::{
     core::PWSTR,
-    Win32::Graphics::Printing::{EnumPrintersW, PRINTER_ENUM_LOCAL, PRINTER_ENUM_NETWORK, PRINTER_INFO_4W},
+    Win32::Graphics::Printing::{
+        EnumPrintersW, PRINTER_ATTRIBUTE_WORK_OFFLINE, PRINTER_ENUM_LOCAL, PRINTER_ENUM_NETWORK, PRINTER_INFO_2W,
+        PRINTER_INFO_4W,
+    },
 };
 
 #[derive(Clone)]
@@ -15,10 +18,11 @@ pub struct WindowsPrinter {
     raw_vec: Vec<u16>,
     raw_name: PWSTR,
     name: OnceCell<String>,
+    online: bool,
 }
 
 impl WindowsPrinter {
-    pub fn new(printer_name: PWSTR) -> Self {
+    pub fn new(printer_name: PWSTR, online: bool) -> Self {
         unsafe {
             let mut raw_vec = printer_name.as_wide().to_vec();
             raw_vec.push(0x0);
@@ -27,6 +31,7 @@ impl WindowsPrinter {
                 raw_name: PWSTR(raw_vec.as_mut_ptr()),
                 raw_vec,
                 name: OnceCell::new(),
+                online,
             }
         }
     }
@@ -49,12 +54,16 @@ impl WindowsPrinter {
             .get_or_init(|| unsafe { PWSTR(self.raw_vec.clone().as_mut_ptr()).to_string().unwrap() })
     }
 
+    pub fn is_online(&self) -> bool {
+        self.online
+    }
+
     pub fn list_printers() -> Result<Vec<WindowsPrinter>> {
         let mut needed = 0;
         let mut returned = 0;
         let mut buffer: Vec<u8>;
         const FLAGS: u32 = PRINTER_ENUM_LOCAL | PRINTER_ENUM_NETWORK;
-        const LEVEL: u32 = 4;
+        const LEVEL: u32 = 2;
         unsafe {
             let _ = EnumPrintersW(FLAGS, PWSTR::null(), LEVEL, None, &mut needed, &mut returned);
 
@@ -68,15 +77,47 @@ impl WindowsPrinter {
                 &mut needed,
                 &mut returned,
             );
-            let sliced = slice::from_raw_parts(buffer.as_ptr() as *const PRINTER_INFO_4W, returned as usize);
+            let sliced = slice::from_raw_parts(buffer.as_ptr() as *const PRINTER_INFO_2W, returned as usize);
 
+            // Return printers with status (info.pStatus)
             let printers = sliced
                 .iter()
-                .map(|info| WindowsPrinter::new(info.pPrinterName))
+                .map(|info| {
+                    WindowsPrinter::new(info.pPrinterName, info.Attributes & PRINTER_ATTRIBUTE_WORK_OFFLINE == 0)
+                })
                 .collect::<Vec<WindowsPrinter>>();
             Ok(printers)
         }
     }
+
+    // pub fn list_printers() -> Result<Vec<WindowsPrinter>> {
+    //     let mut needed = 0;
+    //     let mut returned = 0;
+    //     let mut buffer: Vec<u8>;
+    //     const FLAGS: u32 = PRINTER_ENUM_LOCAL | PRINTER_ENUM_NETWORK;
+    //     const LEVEL: u32 = 4;
+    //     unsafe {
+    //         let _ = EnumPrintersW(FLAGS, PWSTR::null(), LEVEL, None, &mut needed, &mut returned);
+
+    //         buffer = vec![0; needed as usize];
+
+    //         let _ = EnumPrintersW(
+    //             FLAGS,
+    //             PWSTR::null(),
+    //             LEVEL,
+    //             Some(buffer.as_mut_slice()),
+    //             &mut needed,
+    //             &mut returned,
+    //         );
+    //         let sliced = slice::from_raw_parts(buffer.as_ptr() as *const PRINTER_INFO_4W, returned as usize);
+
+    //         let printers = sliced
+    //             .iter()
+    //             .map(|info| WindowsPrinter::new(info.pPrinterName))
+    //             .collect::<Vec<WindowsPrinter>>();
+    //         Ok(printers)
+    //     }
+    // }
 }
 
 impl Debug for WindowsPrinter {
